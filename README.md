@@ -440,16 +440,6 @@ This POC demonstrates that we can build **reliable, non-flaky E2E tests** for di
 4. **Maintaining real integration** - tests exercise actual NServiceBus, SQL Server, and process boundaries
 5. **Enabling simple test authoring** - the complexity is hidden in the base class
 
-### Business Value
-
-| Stakeholder | Benefit |
-|-------------|---------|
-| **Developers** | Write tests that don't randomly fail; clear, readable test code |
-| **QA** | Reliable test suite that can be trusted; faster feedback on failures |
-| **Architects** | Pattern that scales to complex message flows; uses standard OpenTelemetry |
-| **DevOps** | Faster CI/CD pipelines (no padding with delays); fewer flaky test investigations |
-| **Management** | Higher confidence in releases; reduced time debugging test infrastructure |
-
 ---
 
 ## Features Demonstrated
