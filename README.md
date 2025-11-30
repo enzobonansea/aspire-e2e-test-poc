@@ -13,7 +13,10 @@ PingPong.sln
 │   ├── PingPong.Receiver/          # NServiceBus endpoint, handles PingMessage
 │   └── PingPong.AppHost/           # Aspire orchestrator
 └── tests/
-    └── PingPong.Tests/             # xUnit + Aspire testing + OTLP collector
+    └── PingPong.Tests/
+        ├── EndToEndTest.cs         # Abstract base class (infrastructure)
+        ├── PingPongEndToEndTests.cs # Simple test class
+        └── OtlpTraceCollector.cs   # gRPC OTLP receiver
 ```
 
 ## How It Works
@@ -31,21 +34,38 @@ PingPong.sln
 - **Reliably passes** - Tested 44+ consecutive runs without failure
 - **Fast feedback** - Tests complete in ~5-7 seconds
 - **Fails fast on timeout** - 30s timeout with diagnostic output
+- **Easy to write new tests** - Just inherit from `EndToEndTest<TAppHost>`
 
-## Test Flow
+## Writing E2E Tests
+
+Inherit from `EndToEndTest<TAppHost>` and use the provided helper methods:
 
 ```csharp
-[Fact]
-public async Task Ping_message_should_be_processed()
+public class PingPongEndToEndTests : EndToEndTest<Projects.PingPong_AppHost>
 {
-    // Arrange: OTLP collector already running, subscribed to SpanReceived event
-    // with TaskCompletionSource awaiting "process message" span for PingMessage
+    [Fact]
+    public async Task Ping_message_should_be_processed()
+    {
+        // Arrange
+        var timeout = TimeSpan.FromSeconds(30);
 
-    // Act: Sender automatically sends PingMessage on startup
+        // Act & Assert
+        var span = await WaitForMessageProcessed<PingMessage>(timeout);
 
-    // Assert: Await TCS (30s timeout), verify span completed successfully
+        AssertSpanSucceeded(span);
+    }
 }
 ```
+
+### Available Methods in EndToEndTest
+
+| Method | Description |
+|--------|-------------|
+| `WaitForMessageProcessed<TMessage>(timeout)` | Waits for a message of type `TMessage` to be processed |
+| `WaitForSpan(predicate, timeout)` | Waits for any span matching the predicate |
+| `AssertSpanSucceeded(span)` | Asserts the span has no error status |
+| `App` | Access to the Aspire `DistributedApplication` |
+| `ReceivedSpans` | All spans received for custom assertions |
 
 ## Prerequisites
 
@@ -60,6 +80,14 @@ dotnet test
 
 ## Key Implementation Details
 
+### EndToEndTest Base Class
+
+The abstract `EndToEndTest<TAppHost>` class handles all infrastructure:
+- Starting the OTLP gRPC collector on a dynamic port
+- Configuring and launching the Aspire application
+- Providing helper methods for waiting on spans
+- Cleanup on test completion
+
 ### ServiceDefaults (OTLP Export)
 
 ```csharp
@@ -71,7 +99,7 @@ builder.Services.AddOpenTelemetry()
     });
 ```
 
-### Test OTLP Collector
+### OTLP Trace Collector
 
 The test hosts a gRPC server implementing the OTLP TraceService that captures spans:
 
@@ -96,7 +124,7 @@ public class OtlpTraceCollector : TraceService.TraceServiceBase
 
 The test identifies successful message processing by matching:
 - Span name: `"process message"`
-- Attribute: `nservicebus.enclosed_message_types` contains `"PingMessage"`
+- Attribute: `nservicebus.enclosed_message_types` contains the message type name
 - Status: Not error
 
 ## What This Proves
@@ -105,3 +133,4 @@ That we can use Aspire's OTLP telemetry pipeline to subscribe to NServiceBus Act
 - Arbitrary `Task.Delay` calls
 - External telemetry systems (Jaeger, Application Insights, etc.)
 - Flaky timing-based assertions
+- Boilerplate infrastructure code in each test
