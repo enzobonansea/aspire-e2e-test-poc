@@ -77,7 +77,7 @@ public sealed class PingPongEndToEndTests : EndToEndTest<Projects.PingPong_AppHo
         // Act
         var pingId = await SendMutationAndWaitForMessage<PingMessage, Guid>(
             mutation,
-            data => data.GetProperty("sendPing").GetProperty("id").GetGuid(),
+            mutationResult => mutationResult.GetProperty("sendPing").GetProperty("id").GetGuid(),
             timeout);
 
         // Assert
@@ -97,7 +97,7 @@ public sealed class PingPongEndToEndTests : EndToEndTest<Projects.PingPong_AppHo
         // Act
         var pingId = await SendMutationAndWaitForMessage<PongMessage, Guid>(
             mutation,
-            data => data.GetProperty("sendPing").GetProperty("id").GetGuid(),
+            mutationResult => mutationResult.GetProperty("sendPing").GetProperty("id").GetGuid(),
             timeout);
 
         // Assert
