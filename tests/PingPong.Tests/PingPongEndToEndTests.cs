@@ -1,4 +1,5 @@
 using Microsoft.EntityFrameworkCore;
+using PingPong.Data;
 using PingPong.Messages;
 
 namespace PingPong.Tests;
@@ -47,5 +48,53 @@ public sealed class PingPongEndToEndTests : EndToEndTest<Projects.PingPong_AppHo
         var pong = await db.Pongs.FirstOrDefaultAsync(p => p.PingId == pingId);
         Assert.NotNull(pong);
         Assert.NotNull(pong.ReceivedAt);
+    }
+
+    [Fact]
+    public async Task Update_ping_should_update_both_ping_and_pong()
+    {
+        // Arrange - seed ping and pong in database
+        var pingId = Guid.NewGuid();
+        var pongId = Guid.NewGuid();
+
+        await using (var db = CreateDbContext())
+        {
+            db.Pings.Add(new Ping
+            {
+                Id = pingId,
+                SentAt = DateTime.UtcNow.AddMinutes(-5),
+                ReceivedAt = DateTime.UtcNow.AddMinutes(-4)
+            });
+
+            db.Pongs.Add(new Pong
+            {
+                Id = pongId,
+                PingId = pingId,
+                SentAt = DateTime.UtcNow.AddMinutes(-3),
+                ReceivedAt = DateTime.UtcNow.AddMinutes(-2)
+            });
+
+            await db.SaveChangesAsync();
+        }
+
+        var mutation = $"mutation {{ updatePing(pingId: \"{pingId}\") {{ pingId sentAt }} }}";
+        var timeout = TimeSpan.FromSeconds(60);
+
+        // Act
+        await SendMutationAndWaitForMessage<PingUpdatedMessage, Guid>(
+            mutation,
+            mutationResult => mutationResult.GetProperty("updatePing").GetProperty("pingId").GetGuid(),
+            timeout);
+
+        // Assert
+        await using var dbAssert = CreateDbContext();
+
+        var ping = await dbAssert.Pings.FindAsync(pingId);
+        Assert.NotNull(ping);
+        Assert.NotNull(ping.UpdatedAt);
+
+        var pong = await dbAssert.Pongs.FirstOrDefaultAsync(p => p.PingId == pingId);
+        Assert.NotNull(pong);
+        Assert.NotNull(pong.UpdatedAt);
     }
 }

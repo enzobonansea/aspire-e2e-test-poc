@@ -7,17 +7,17 @@ This POC validates that we can reliably assert when a message has been processed
 ```
 PingPong.sln
 ├── src/
-│   ├── PingPong.Messages/          # PingMessage & PongMessage : IMessage
+│   ├── PingPong.Messages/          # Messages: PingMessage, PongMessage, UpdatePingMessage, PingUpdatedMessage
 │   ├── PingPong.Data/              # EF Core DbContext, Ping & Pong entities
 │   ├── PingPong.ServiceDefaults/   # Shared config with OTLP exporter
 │   ├── PingPong.Api/               # GraphQL API (HotChocolate), send-only NServiceBus
-│   ├── PingPong.PingServiceBus/    # NServiceBus endpoint, handles PingMessage, sends Pong
-│   ├── PingPong.PongServiceBus/    # NServiceBus endpoint, handles PongMessage
+│   ├── PingPong.PingServiceBus/    # NServiceBus endpoint, handles PingMessage/UpdatePingMessage
+│   ├── PingPong.PongServiceBus/    # NServiceBus endpoint, handles PongMessage/PingUpdatedMessage
 │   └── PingPong.AppHost/           # Aspire orchestrator with SQL Server container
 └── tests/
     └── PingPong.Tests/
         ├── EndToEndTest.cs         # Base class with shared IClassFixture
-        ├── PingPongEndToEndTests.cs # Test class with 2 E2E tests
+        ├── PingPongEndToEndTests.cs # Test class with 3 E2E tests
         └── OtlpTraceCollector.cs   # gRPC OTLP receiver
 ```
 
@@ -36,6 +36,16 @@ PingPong.sln
                                       │  SQL Server  │
                                       │  (pingpongdb)│
                                       └──────────────┘
+```
+
+### Update Flow (updatePing mutation)
+
+```
+┌─────────┐  GraphQL     ┌────────────────┐                    ┌────────────────┐
+│   API   │──mutation───►│ PingServiceBus │──PingUpdatedMsg──►│ PongServiceBus │
+│(send-   │              │                │                    │                │
+│ only)   │              │ updates Ping   │                    │ updates Pong   │
+└─────────┘              └────────────────┘                    └────────────────┘
 ```
 
 ## How It Works
@@ -105,6 +115,38 @@ public sealed class PingPongEndToEndTests : EndToEndTest<Projects.PingPong_AppHo
         var pong = await db.Pongs.FirstOrDefaultAsync(p => p.PingId == pingId);
         Assert.NotNull(pong);
         Assert.NotNull(pong.ReceivedAt);
+    }
+
+    [Fact]
+    public async Task Update_ping_should_update_both_ping_and_pong()
+    {
+        // Arrange - seed ping and pong in database
+        var pingId = Guid.NewGuid();
+        var pongId = Guid.NewGuid();
+
+        await using (var db = CreateDbContext())
+        {
+            db.Pings.Add(new Ping { Id = pingId, SentAt = DateTime.UtcNow.AddMinutes(-5), ReceivedAt = DateTime.UtcNow.AddMinutes(-4) });
+            db.Pongs.Add(new Pong { Id = pongId, PingId = pingId, SentAt = DateTime.UtcNow.AddMinutes(-3), ReceivedAt = DateTime.UtcNow.AddMinutes(-2) });
+            await db.SaveChangesAsync();
+        }
+
+        var mutation = $"mutation {{ updatePing(pingId: \"{pingId}\") {{ pingId sentAt }} }}";
+        var timeout = TimeSpan.FromSeconds(60);
+
+        // Act
+        await SendMutationAndWaitForMessage<PingUpdatedMessage, Guid>(
+            mutation,
+            mutationResult => mutationResult.GetProperty("updatePing").GetProperty("pingId").GetGuid(),
+            timeout);
+
+        // Assert
+        await using var dbAssert = CreateDbContext();
+        var ping = await dbAssert.Pings.FindAsync(pingId);
+        Assert.NotNull(ping?.UpdatedAt);
+
+        var pong = await dbAssert.Pongs.FirstOrDefaultAsync(p => p.PingId == pingId);
+        Assert.NotNull(pong?.UpdatedAt);
     }
 }
 ```
@@ -194,7 +236,8 @@ That we can use Aspire's OTLP telemetry pipeline to subscribe to NServiceBus Act
 
 - **NServiceBus messaging** with LearningTransport and OpenTelemetry
 - **Ping-Pong message flow** with send-only API endpoint and receive-capable services
-- **GraphQL API** using HotChocolate with mutations
+- **Update flow** with seeded data demonstrating existing entity updates across services
+- **GraphQL API** using HotChocolate with mutations (sendPing, updatePing)
 - **SQL Server test container** with Entity Framework Core
 - **Database persistence** for both Ping and Pong messages
 - **Shared test fixture** using xUnit IClassFixture for efficient test runs
