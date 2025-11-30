@@ -151,9 +151,9 @@ public abstract class EndToEndTest<TAppHost> : IClassFixture<AspireFixture<TAppH
     }
 
     /// <summary>
-    /// Sends a GraphQL mutation and returns the ID from the response.
+    /// Sends a GraphQL mutation and extracts a result using the provided selector.
     /// </summary>
-    protected async Task<Guid> SendGraphQLMutation(string mutation)
+    protected async Task<TResult> SendGraphQLMutation<TResult>(string mutation, Func<JsonElement, TResult> resultSelector)
     {
         using var httpClient = CreateHttpClient("api");
         var graphqlQuery = new { query = mutation };
@@ -179,19 +179,21 @@ public abstract class EndToEndTest<TAppHost> : IClassFixture<AspireFixture<TAppH
             throw new Exception($"GraphQL errors: {errors}");
         }
 
-        // Extract ID from data.sendPing.id
-        return jsonResponse.GetProperty("data").GetProperty("sendPing").GetProperty("id").GetGuid();
+        return resultSelector(jsonResponse.GetProperty("data"));
     }
 
     /// <summary>
-    /// Sends a GraphQL mutation, waits for message processing, and asserts success.
+    /// Sends a GraphQL mutation, waits for message processing, and returns the extracted result.
     /// </summary>
-    protected async Task<Guid> SendMutationAndWaitForMessage<TMessage>(string mutation, TimeSpan timeout)
+    protected async Task<TResult> SendMutationAndWaitForMessage<TMessage, TResult>(
+        string mutation,
+        Func<JsonElement, TResult> resultSelector,
+        TimeSpan timeout)
     {
-        var id = await SendGraphQLMutation(mutation);
+        var result = await SendGraphQLMutation(mutation, resultSelector);
         var span = await WaitForMessageProcessed<TMessage>(timeout);
         AssertSpanSucceeded(span);
-        return id;
+        return result;
     }
 
     /// <summary>

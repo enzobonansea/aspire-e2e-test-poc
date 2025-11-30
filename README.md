@@ -75,7 +75,10 @@ public sealed class PingPongEndToEndTests : EndToEndTest<Projects.PingPong_AppHo
         var timeout = TimeSpan.FromSeconds(30);
 
         // Act
-        var pingId = await SendMutationAndWaitForMessage<PingMessage>(mutation, timeout);
+        var pingId = await SendMutationAndWaitForMessage<PingMessage, Guid>(
+            mutation,
+            data => data.GetProperty("sendPing").GetProperty("id").GetGuid(),
+            timeout);
 
         // Assert
         await using var db = CreateDbContext();
@@ -92,7 +95,10 @@ public sealed class PingPongEndToEndTests : EndToEndTest<Projects.PingPong_AppHo
         var timeout = TimeSpan.FromSeconds(60);
 
         // Act
-        var pingId = await SendMutationAndWaitForMessage<PongMessage>(mutation, timeout);
+        var pingId = await SendMutationAndWaitForMessage<PongMessage, Guid>(
+            mutation,
+            data => data.GetProperty("sendPing").GetProperty("id").GetGuid(),
+            timeout);
 
         // Assert
         await using var db = CreateDbContext();
@@ -107,8 +113,8 @@ public sealed class PingPongEndToEndTests : EndToEndTest<Projects.PingPong_AppHo
 
 | Method | Description |
 |--------|-------------|
-| `SendMutationAndWaitForMessage<TMessage>(mutation, timeout)` | Sends GraphQL mutation, waits for message processing, returns ID |
-| `SendGraphQLMutation(mutation)` | Sends GraphQL mutation and returns the ID from response |
+| `SendMutationAndWaitForMessage<TMessage, TResult>(mutation, resultSelector, timeout)` | Sends GraphQL mutation, waits for message processing, returns extracted result |
+| `SendGraphQLMutation<TResult>(mutation, resultSelector)` | Sends GraphQL mutation and extracts result using selector |
 | `WaitForMessageProcessed<TMessage>(timeout)` | Waits for a message of type `TMessage` to be processed |
 | `WaitForSpan(predicate, timeout)` | Waits for any span matching the predicate |
 | `AssertSpanSucceeded(span)` | Asserts the span has no error status |
