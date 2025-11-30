@@ -26,7 +26,7 @@ We leverage **OpenTelemetry (OTLP)** - the same telemetry pipeline used in produ
 │  ┌─────────────────┐                           ┌─────────────────────────────┐  │
 │  │   Test Code     │                           │   OTLP Collector (gRPC)     │  │
 │  │                 │                           │                             │  │
-│  │  1. Send HTTP   │                           │  3. Receives "process       │  │
+│  │  1. Send GraphQL│                           │  3. Receives "process       │  │
 │  │     request     │                           │     message" span from      │  │
 │  │                 │                           │     NServiceBus             │  │
 │  │  4. Assert DB   │◄──── Signal ───────────── │                             │  │
@@ -34,7 +34,7 @@ We leverage **OpenTelemetry (OTLP)** - the same telemetry pipeline used in produ
 │  └────────┬────────┘                           └──────────────▲──────────────┘  │
 │           │                                                   │                 │
 └───────────┼───────────────────────────────────────────────────┼─────────────────┘
-            │ HTTP                                               │ OTLP/gRPC
+            │ GraphQL                                            │ OTLP/gRPC
             ▼                                                   │
 ┌───────────────────────────────────────────────────────────────┼─────────────────┐
 │                         ASPIRE-MANAGED PROCESSES              │                 │
@@ -60,7 +60,7 @@ We leverage **OpenTelemetry (OTLP)** - the same telemetry pipeline used in produ
 
 ```csharp
 // ❌ FLAKY: Race condition between message processing and assertion
-await httpClient.PostAsync("/api/send-ping", content);
+await SendGraphQLMutation("mutation { sendPing { id } }");
 
 // How long should we wait? Nobody knows!
 await Task.Delay(2000); // Too short on slow CI? Too long wastes time.
@@ -84,7 +84,7 @@ for (int i = 0; i < 10; i++)
 
 ```csharp
 // ✅ RELIABLE: Wait for the actual processing event
-await httpClient.PostAsync("/api/send-ping", content);
+await SendGraphQLMutation("mutation { sendPing { id } }");
 
 // Wait for NServiceBus to tell us "I finished processing PongMessage"
 await WaitForMessageProcessed<PongMessage>(timeout: TimeSpan.FromSeconds(60));
@@ -110,7 +110,7 @@ The timing is **precise and deterministic**:
 Timeline:
 ─────────────────────────────────────────────────────────────────────────────────►
 
-1. Test sends HTTP request
+1. Test sends GraphQL mutation
    │
    ▼
 2. API receives request, sends NServiceBus message
