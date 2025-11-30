@@ -1,4 +1,4 @@
-# Aspire E2E Testing POC: NServiceBus ActivitySource Subscription
+# Reliable E2E Testing for NServiceBus with Aspire and OpenTelemetry
 
 ## Executive Summary
 
