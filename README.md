@@ -142,44 +142,44 @@ Timeline:
 ### Connection Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                     TEST PROCESS (xUnit)                        │
-│                                                                 │
-│  ┌───────────────────────────────────────────────────────────┐  │
-│  │  AspireFixture (IClassFixture - one per test class)       │  │
-│  │                                                           │  │
-│  │  1. Starts OTLP gRPC server on random port (e.g., :54321) │  │
+┌──────────────────────────────────────────────────────────────────┐
+│                     TEST PROCESS (xUnit)                         │
+│                                                                  │
+│  ┌───────────────────────────────────────────────────────────┐   │
+│  │  AspireFixture (IClassFixture - one per test class)       │   │
+│  │                                                           │   │
+│  │  1. Starts OTLP gRPC server on random port (e.g., :54321) │   │
 │  │  2. Sets OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:54321│  │
-│  │  3. Launches Aspire AppHost with this environment var     │  │
-│  └───────────────────────────────────────────────────────────┘  │
-│                              │                                  │
-│                              │ Aspire starts child processes    │
-│                              ▼                                  │
-│  ┌───────────────────────────────────────────────────────────┐  │
-│  │  Child Processes (API, PingServiceBus, PongServiceBus)    │  │
-│  │                                                           │  │
-│  │  - Inherit OTEL_EXPORTER_OTLP_ENDPOINT from environment   │  │
-│  │  - NServiceBus.EnableOpenTelemetry() registers spans      │  │
-│  │  - OpenTelemetry SDK exports spans via OTLP/gRPC          │  │
-│  │                                                           │  │
-│  │         ┌─────────────────────────────────────────┐       │  │
-│  │         │  Span: "process message"                │       │  │
-│  │         │  Attributes:                            │       │  │
-│  │         │    nservicebus.enclosed_message_types:  │       │  │
-│  │         │      "PingPong.Messages.PongMessage"    │       │  │
-│  │         └─────────────────────────────────────────┘       │  │
-│  └───────────────────────────────────────────────────────────┘  │
-│                              │                                  │
-│                              │ OTLP/gRPC (automatic export)     │
-│                              ▼                                  │
-│  ┌───────────────────────────────────────────────────────────┐  │
-│  │  OtlpTraceCollector (gRPC TraceService implementation)    │  │
-│  │                                                           │  │
-│  │  - Receives ExportTraceServiceRequest                     │  │
-│  │  - Fires SpanReceived event for each span                 │  │
-│  │  - Test subscribes and signals TaskCompletionSource       │  │
-│  └───────────────────────────────────────────────────────────┘  │
-└─────────────────────────────────────────────────────────────────┘
+│  │  3. Launches Aspire AppHost with this environment var     │   │
+│  └───────────────────────────────────────────────────────────┘   │
+│                              │                                   │
+│                              │ Aspire starts child processes     │
+│                              ▼                                   │
+│  ┌───────────────────────────────────────────────────────────┐   │
+│  │  Child Processes (API, PingServiceBus, PongServiceBus)    │   │
+│  │                                                           │   │
+│  │  - Inherit OTEL_EXPORTER_OTLP_ENDPOINT from environment   │   │
+│  │  - NServiceBus.EnableOpenTelemetry() registers spans      │   │
+│  │  - OpenTelemetry SDK exports spans via OTLP/gRPC          │   │
+│  │                                                           │   │
+│  │         ┌─────────────────────────────────────────┐       │   │
+│  │         │  Span: "process message"                │       │   │
+│  │         │  Attributes:                            │       │   │
+│  │         │    nservicebus.enclosed_message_types:  │       │   │
+│  │         │      "PingPong.Messages.PongMessage"    │       │   │
+│  │         └─────────────────────────────────────────┘       │   │
+│  └───────────────────────────────────────────────────────────┘   │
+│                              │                                   │
+│                              │ OTLP/gRPC (automatic export)      │
+│                              ▼                                   │
+│  ┌───────────────────────────────────────────────────────────┐   │
+│  │  OtlpTraceCollector (gRPC TraceService implementation)    │   │
+│  │                                                           │   │
+│  │  - Receives ExportTraceServiceRequest                     │   │
+│  │  - Fires SpanReceived event for each span                 │   │
+│  │  - Test subscribes and signals TaskCompletionSource       │   │
+│  └───────────────────────────────────────────────────────────┘   │
+└──────────────────────────────────────────────────────────────────┘
 ```
 
 ### Key Configuration Points
