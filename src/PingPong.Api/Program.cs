@@ -5,14 +5,22 @@ var builder = WebApplication.CreateBuilder(args);
 
 builder.AddServiceDefaults();
 
-// Configure NServiceBus
+// Configure NServiceBus as send-only endpoint
 var endpointConfiguration = new EndpointConfiguration("PingPong.Api");
 endpointConfiguration.UseSerialization<SystemJsonSerializer>();
-endpointConfiguration.UseTransport<LearningTransport>();
 endpointConfiguration.EnableOpenTelemetry();
+endpointConfiguration.SendOnly();
+
+// Configure LearningTransport with shared path
+var learningTransportPath = builder.Configuration["LEARNING_TRANSPORT_PATH"];
+var transport = endpointConfiguration.UseTransport<LearningTransport>();
+if (!string.IsNullOrEmpty(learningTransportPath))
+{
+    transport.StorageDirectory(learningTransportPath);
+}
 
 // Configure routing to send PingMessage to the Receiver
-var routing = endpointConfiguration.UseTransport<LearningTransport>().Routing();
+var routing = transport.Routing();
 routing.RouteToEndpoint(typeof(PingMessage), "PingPong.Receiver");
 
 builder.UseNServiceBus(endpointConfiguration);

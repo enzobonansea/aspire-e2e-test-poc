@@ -7,11 +7,13 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <PackageReference Include="Aspire.Microsoft.EntityFrameworkCore.SqlServer" Version="9.0.0" />
     <PackageReference Include="NServiceBus" Version="9.2.5" />
     <PackageReference Include="NServiceBus.Extensions.Hosting" Version="3.0.0" />
   </ItemGroup>
 
   <ItemGroup>
+    <ProjectReference Include="..\PingPong.Data\PingPong.Data.csproj" />
     <ProjectReference Include="..\PingPong.Messages\PingPong.Messages.csproj" />
     <ProjectReference Include="..\PingPong.ServiceDefaults\PingPong.ServiceDefaults.csproj" />
   </ItemGroup>

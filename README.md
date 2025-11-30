@@ -7,35 +7,55 @@ This POC validates that we can reliably assert when a message has been processed
 ```
 PingPong.sln
 ├── src/
-│   ├── PingPong.Messages/          # Contains PingMessage : IMessage
-│   ├── PingPong.Data/              # EF Core DbContext and Ping entity
+│   ├── PingPong.Messages/          # PingMessage & PongMessage : IMessage
+│   ├── PingPong.Data/              # EF Core DbContext, Ping & Pong entities
 │   ├── PingPong.ServiceDefaults/   # Shared config with OTLP exporter
-│   ├── PingPong.Api/               # GraphQL API (HotChocolate) with mutation
-│   ├── PingPong.Sender/            # NServiceBus endpoint, sends PingMessage
-│   ├── PingPong.Receiver/          # NServiceBus endpoint, handles and stores pings
+│   ├── PingPong.Api/               # GraphQL API (HotChocolate), send-only NServiceBus
+│   ├── PingPong.Sender/            # NServiceBus endpoint, handles PongMessage
+│   ├── PingPong.Receiver/          # NServiceBus endpoint, handles PingMessage, sends Pong
 │   └── PingPong.AppHost/           # Aspire orchestrator with SQL Server container
 └── tests/
     └── PingPong.Tests/
-        ├── EndToEndTest.cs         # Abstract base class (infrastructure)
+        ├── EndToEndTest.cs         # Base class with shared IClassFixture
+        ├── AspireFixture.cs        # Shared fixture for Aspire app lifecycle
         ├── PingPongEndToEndTests.cs # Test class with 2 E2E tests
         └── OtlpTraceCollector.cs   # gRPC OTLP receiver
 ```
 
+## Message Flow
+
+```
+┌─────────┐   GraphQL    ┌──────────────┐   PingMessage   ┌──────────────┐
+│   API   │──mutation───►│   Receiver   │────────────────►│   Sender     │
+│(send-   │              │              │◄───PongMessage──│              │
+│ only)   │              │ stores Ping  │                 │ stores Pong  │
+└─────────┘              └──────────────┘                 └──────────────┘
+                              │                                  │
+                              └──────────┐    ┌──────────────────┘
+                                         ▼    ▼
+                                    ┌──────────────┐
+                                    │  SQL Server  │
+                                    │  (pingpongdb)│
+                                    └──────────────┘
+```
+
 ## How It Works
 
-1. **Test starts an in-process OTLP gRPC collector** that receives trace data
-2. **Aspire launches Sender/Receiver** as separate processes with OTLP endpoint configured
+1. **Test fixture starts an in-process OTLP gRPC collector** that receives trace data
+2. **Aspire launches API/Sender/Receiver** as separate processes with OTLP endpoint configured
 3. **NServiceBus `EnableOpenTelemetry()`** emits spans to the OTLP exporter
 4. **Spans flow from child processes → OTLP collector → test assertions**
-5. **Test uses `TaskCompletionSource`** to wait for the "process message" span with PingMessage attributes
+5. **Test uses `TaskCompletionSource`** to wait for the "process message" span with message attributes
+6. **Shared fixture** keeps Aspire app running across all tests in the class for speed
 
 ## Key Success Criteria Met
 
 - **No arbitrary `Task.Delay`** - Uses OTLP + TaskCompletionSource with timeout
 - **Uses Aspire's telemetry pipeline** - OTLP exporter in ServiceDefaults
-- **Reliably passes** - Tested 44+ consecutive runs without failure
-- **Fast feedback** - Tests complete in ~5-7 seconds
-- **Fails fast on timeout** - 30s timeout with diagnostic output
+- **Full Ping-Pong flow** - API → Receiver → Sender with database persistence
+- **Shared test infrastructure** - Uses IClassFixture to share Aspire app across tests
+- **Fast feedback** - Tests complete in ~30 seconds (including SQL Server container startup)
+- **Fails fast on timeout** - 30-60s timeout with diagnostic output showing received spans
 - **Easy to write new tests** - Just inherit from `EndToEndTest<TAppHost>`
 
 ## Writing E2E Tests
@@ -43,50 +63,69 @@ PingPong.sln
 Inherit from `EndToEndTest<TAppHost>` and use the provided helper methods:
 
 ```csharp
-public class PingPongEndToEndTests : EndToEndTest<Projects.PingPong_AppHost>
+public sealed class PingPongEndToEndTests : EndToEndTest<Projects.PingPong_AppHost>
 {
-    [Fact]
-    public async Task Ping_message_should_be_processed()
-    {
-        var timeout = TimeSpan.FromSeconds(120);
-
-        var span = await WaitForMessageProcessed<PingMessage>(timeout);
-
-        AssertSpanSucceeded(span);
-    }
+    public PingPongEndToEndTests(AspireFixture<Projects.PingPong_AppHost> fixture)
+        : base(fixture) { }
 
     [Fact]
     public async Task Ping_sent_via_graphql_should_be_stored_in_database()
     {
-        var timeout = TimeSpan.FromSeconds(120);
+        // Arrange
         using var httpClient = CreateHttpClient("api");
-
-        // Send GraphQL mutation
         var graphqlQuery = new { query = "mutation { sendPing { id sentAt } }" };
+
+        // Act - Send GraphQL mutation
         var content = new StringContent(
             JsonSerializer.Serialize(graphqlQuery),
             Encoding.UTF8,
             "application/json");
         var response = await httpClient.PostAsync("/graphql", content);
-        var responseContent = await response.Content.ReadAsStringAsync();
-        var jsonResponse = JsonSerializer.Deserialize<JsonElement>(responseContent);
-        var pingId = jsonResponse.GetProperty("data").GetProperty("sendPing").GetProperty("id").GetGuid();
+        var jsonResponse = JsonSerializer.Deserialize<JsonElement>(
+            await response.Content.ReadAsStringAsync());
+        var pingId = jsonResponse.GetProperty("data")
+            .GetProperty("sendPing").GetProperty("id").GetGuid();
 
         // Wait for message to be processed
-        var span = await WaitForMessageProcessed<PingMessage>(timeout);
+        var span = await WaitForMessageProcessed<PingMessage>(TimeSpan.FromSeconds(30));
         AssertSpanSucceeded(span);
 
-        // Assert ping is stored in database
-        var connectionString = await GetConnectionStringAsync("pingpongdb");
-        var options = new DbContextOptionsBuilder<PingPongDbContext>()
-            .UseSqlServer(connectionString)
-            .Options;
-
-        await using var dbContext = new PingPongDbContext(options);
+        // Assert - Verify ping is stored in database
+        await using var dbContext = CreateDbContext();
         var storedPing = await dbContext.Pings.FindAsync(pingId);
 
         Assert.NotNull(storedPing);
         Assert.NotNull(storedPing.ReceivedAt);
+    }
+
+    [Fact]
+    public async Task Ping_pong_full_flow_should_store_pong_in_database()
+    {
+        // Arrange
+        using var httpClient = CreateHttpClient("api");
+        var graphqlQuery = new { query = "mutation { sendPing { id sentAt } }" };
+
+        // Act - Send GraphQL mutation
+        var content = new StringContent(
+            JsonSerializer.Serialize(graphqlQuery),
+            Encoding.UTF8,
+            "application/json");
+        var response = await httpClient.PostAsync("/graphql", content);
+        var jsonResponse = JsonSerializer.Deserialize<JsonElement>(
+            await response.Content.ReadAsStringAsync());
+        var pingId = jsonResponse.GetProperty("data")
+            .GetProperty("sendPing").GetProperty("id").GetGuid();
+
+        // Wait for Pong message to be processed (full flow: API -> Receiver -> Sender)
+        var span = await WaitForMessageProcessed<PongMessage>(TimeSpan.FromSeconds(60));
+        AssertSpanSucceeded(span);
+
+        // Assert - Verify pong is stored in database
+        await using var dbContext = CreateDbContext();
+        var storedPong = await dbContext.Pongs.FirstOrDefaultAsync(p => p.PingId == pingId);
+
+        Assert.NotNull(storedPong);
+        Assert.NotNull(storedPong.ReceivedAt);
     }
 }
 ```
@@ -99,9 +138,8 @@ public class PingPongEndToEndTests : EndToEndTest<Projects.PingPong_AppHost>
 | `WaitForSpan(predicate, timeout)` | Waits for any span matching the predicate |
 | `AssertSpanSucceeded(span)` | Asserts the span has no error status |
 | `CreateHttpClient(resourceName)` | Creates an HTTP client for calling a resource |
-| `GetConnectionStringAsync(resourceName)` | Gets the connection string for a resource |
+| `CreateDbContext()` | Creates a DbContext for database assertions |
 | `App` | Access to the Aspire `DistributedApplication` |
-| `ReceivedSpans` | All spans received for custom assertions |
 
 ## Prerequisites
 
@@ -117,13 +155,13 @@ dotnet test
 
 ## Key Implementation Details
 
-### EndToEndTest Base Class
+### EndToEndTest Base Class with Shared Fixture
 
-The abstract `EndToEndTest<TAppHost>` class handles all infrastructure:
-- Starting the OTLP gRPC collector on a dynamic port
-- Configuring and launching the Aspire application
-- Providing helper methods for waiting on spans
-- Cleanup on test completion
+The `EndToEndTest<TAppHost>` class uses xUnit's `IClassFixture` pattern:
+- **AspireFixture** starts the OTLP collector and Aspire app once per test class
+- **Shared infrastructure** means tests run faster (no container restart per test)
+- **DbContext factory** for database assertions
+- **Span collection** continues throughout all tests in the class
 
 ### ServiceDefaults (OTLP Export)
 
@@ -175,6 +213,9 @@ That we can use Aspire's OTLP telemetry pipeline to subscribe to NServiceBus Act
 ## Features Demonstrated
 
 - **NServiceBus messaging** with LearningTransport and OpenTelemetry
+- **Ping-Pong message flow** with send-only API endpoint and receive-capable services
 - **GraphQL API** using HotChocolate with mutations
 - **SQL Server test container** with Entity Framework Core
-- **Full E2E flow**: API → NServiceBus message → Handler → Database → Assertion
+- **Database persistence** for both Ping and Pong messages
+- **Shared test fixture** using xUnit IClassFixture for efficient test runs
+- **Full E2E flow**: API → Receiver → Sender → Database → Assertion

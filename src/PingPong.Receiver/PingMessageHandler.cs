@@ -31,5 +31,15 @@ public class PingMessageHandler : IHandleMessages<PingMessage>
         await _dbContext.SaveChangesAsync(context.CancellationToken);
 
         _logger.LogInformation("Stored ping {Id} in database", ping.Id);
+
+        // Send Pong to Sender
+        var pongMessage = new PongMessage
+        {
+            PingId = message.Id
+        };
+
+        await context.Send(pongMessage);
+
+        _logger.LogInformation("Sent PongMessage to Sender for ping {PingId}", message.Id);
     }
 }
