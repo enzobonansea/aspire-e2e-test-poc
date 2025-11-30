@@ -34,7 +34,7 @@ We leverage **OpenTelemetry (OTLP)** - the same telemetry pipeline used in produ
 │  └────────┬────────┘                           └──────────────▲──────────────┘  │
 │           │                                                   │                 │
 └───────────┼───────────────────────────────────────────────────┼─────────────────┘
-            │ GraphQL                                            │ OTLP/gRPC
+            │ GraphQL                                           │ OTLP/gRPC
             ▼                                                   │
 ┌───────────────────────────────────────────────────────────────┼─────────────────┐
 │                         ASPIRE-MANAGED PROCESSES              │                 │
