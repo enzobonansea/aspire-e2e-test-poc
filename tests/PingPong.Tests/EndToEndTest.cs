@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Aspire.Hosting;
 using Aspire.Hosting.Testing;
 using Microsoft.AspNetCore.Builder;
@@ -147,6 +148,50 @@ public abstract class EndToEndTest<TAppHost> : IClassFixture<AspireFixture<TAppH
     protected PingPongDbContext CreateDbContext()
     {
         return Fixture.CreateDbContext();
+    }
+
+    /// <summary>
+    /// Sends a GraphQL mutation and returns the ID from the response.
+    /// </summary>
+    protected async Task<Guid> SendGraphQLMutation(string mutation)
+    {
+        using var httpClient = CreateHttpClient("api");
+        var graphqlQuery = new { query = mutation };
+
+        var content = new StringContent(
+            JsonSerializer.Serialize(graphqlQuery),
+            System.Text.Encoding.UTF8,
+            "application/json");
+
+        var response = await httpClient.PostAsync("/graphql", content);
+        var responseContent = await response.Content.ReadAsStringAsync();
+
+        if (!response.IsSuccessStatusCode)
+        {
+            throw new Exception($"GraphQL request failed: {response.StatusCode}. Response: {responseContent}");
+        }
+
+        var jsonResponse = JsonSerializer.Deserialize<JsonElement>(responseContent);
+
+        // Check for GraphQL errors
+        if (jsonResponse.TryGetProperty("errors", out var errors))
+        {
+            throw new Exception($"GraphQL errors: {errors}");
+        }
+
+        // Extract ID from data.sendPing.id
+        return jsonResponse.GetProperty("data").GetProperty("sendPing").GetProperty("id").GetGuid();
+    }
+
+    /// <summary>
+    /// Sends a GraphQL mutation, waits for message processing, and asserts success.
+    /// </summary>
+    protected async Task<Guid> SendMutationAndWaitForMessage<TMessage>(string mutation, TimeSpan timeout)
+    {
+        var id = await SendGraphQLMutation(mutation);
+        var span = await WaitForMessageProcessed<TMessage>(timeout);
+        AssertSpanSucceeded(span);
+        return id;
     }
 
     /// <summary>

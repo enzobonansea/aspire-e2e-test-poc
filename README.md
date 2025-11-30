@@ -72,60 +72,34 @@ public sealed class PingPongEndToEndTests : EndToEndTest<Projects.PingPong_AppHo
     public async Task Ping_sent_via_graphql_should_be_stored_in_database()
     {
         // Arrange
-        using var httpClient = CreateHttpClient("api");
-        var graphqlQuery = new { query = "mutation { sendPing { id sentAt } }" };
+        var mutation = "mutation { sendPing { id sentAt } }";
+        var timeout = TimeSpan.FromSeconds(30);
 
-        // Act - Send GraphQL mutation
-        var content = new StringContent(
-            JsonSerializer.Serialize(graphqlQuery),
-            Encoding.UTF8,
-            "application/json");
-        var response = await httpClient.PostAsync("/graphql", content);
-        var jsonResponse = JsonSerializer.Deserialize<JsonElement>(
-            await response.Content.ReadAsStringAsync());
-        var pingId = jsonResponse.GetProperty("data")
-            .GetProperty("sendPing").GetProperty("id").GetGuid();
+        // Act
+        var pingId = await SendMutationAndWaitForMessage<PingMessage>(mutation, timeout);
 
-        // Wait for message to be processed
-        var span = await WaitForMessageProcessed<PingMessage>(TimeSpan.FromSeconds(30));
-        AssertSpanSucceeded(span);
-
-        // Assert - Verify ping is stored in database
-        await using var dbContext = CreateDbContext();
-        var storedPing = await dbContext.Pings.FindAsync(pingId);
-
-        Assert.NotNull(storedPing);
-        Assert.NotNull(storedPing.ReceivedAt);
+        // Assert
+        await using var db = CreateDbContext();
+        var ping = await db.Pings.FindAsync(pingId);
+        Assert.NotNull(ping);
+        Assert.NotNull(ping.ReceivedAt);
     }
 
     [Fact]
     public async Task Ping_pong_full_flow_should_store_pong_in_database()
     {
         // Arrange
-        using var httpClient = CreateHttpClient("api");
-        var graphqlQuery = new { query = "mutation { sendPing { id sentAt } }" };
+        var mutation = "mutation { sendPing { id sentAt } }";
+        var timeout = TimeSpan.FromSeconds(60);
 
-        // Act - Send GraphQL mutation
-        var content = new StringContent(
-            JsonSerializer.Serialize(graphqlQuery),
-            Encoding.UTF8,
-            "application/json");
-        var response = await httpClient.PostAsync("/graphql", content);
-        var jsonResponse = JsonSerializer.Deserialize<JsonElement>(
-            await response.Content.ReadAsStringAsync());
-        var pingId = jsonResponse.GetProperty("data")
-            .GetProperty("sendPing").GetProperty("id").GetGuid();
+        // Act
+        var pingId = await SendMutationAndWaitForMessage<PongMessage>(mutation, timeout);
 
-        // Wait for Pong message to be processed (full flow: API -> Receiver -> Sender)
-        var span = await WaitForMessageProcessed<PongMessage>(TimeSpan.FromSeconds(60));
-        AssertSpanSucceeded(span);
-
-        // Assert - Verify pong is stored in database
-        await using var dbContext = CreateDbContext();
-        var storedPong = await dbContext.Pongs.FirstOrDefaultAsync(p => p.PingId == pingId);
-
-        Assert.NotNull(storedPong);
-        Assert.NotNull(storedPong.ReceivedAt);
+        // Assert
+        await using var db = CreateDbContext();
+        var pong = await db.Pongs.FirstOrDefaultAsync(p => p.PingId == pingId);
+        Assert.NotNull(pong);
+        Assert.NotNull(pong.ReceivedAt);
     }
 }
 ```
@@ -134,12 +108,13 @@ public sealed class PingPongEndToEndTests : EndToEndTest<Projects.PingPong_AppHo
 
 | Method | Description |
 |--------|-------------|
+| `SendMutationAndWaitForMessage<TMessage>(mutation, timeout)` | Sends GraphQL mutation, waits for message processing, returns ID |
+| `SendGraphQLMutation(mutation)` | Sends GraphQL mutation and returns the ID from response |
 | `WaitForMessageProcessed<TMessage>(timeout)` | Waits for a message of type `TMessage` to be processed |
 | `WaitForSpan(predicate, timeout)` | Waits for any span matching the predicate |
 | `AssertSpanSucceeded(span)` | Asserts the span has no error status |
-| `CreateHttpClient(resourceName)` | Creates an HTTP client for calling a resource |
 | `CreateDbContext()` | Creates a DbContext for database assertions |
-| `App` | Access to the Aspire `DistributedApplication` |
+| `CreateHttpClient(resourceName)` | Creates an HTTP client for calling a resource |
 
 ## Prerequisites
 
