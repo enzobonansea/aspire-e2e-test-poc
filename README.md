@@ -145,13 +145,13 @@ Timeline:
 ┌──────────────────────────────────────────────────────────────────┐
 │                     TEST PROCESS (xUnit)                         │
 │                                                                  │
-│  ┌───────────────────────────────────────────────────────────┐   │
-│  │  AspireFixture (IClassFixture - one per test class)       │   │
-│  │                                                           │   │
-│  │  1. Starts OTLP gRPC server on random port (e.g., :54321) │   │
+│  ┌────────────────────────────────────────────────────────────┐  │
+│  │  AspireFixture (IClassFixture - one per test class)        │  │
+│  │                                                            │  │
+│  │  1. Starts OTLP gRPC server on random port (e.g., :54321)  │  │
 │  │  2. Sets OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:54321│  │
-│  │  3. Launches Aspire AppHost with this environment var     │   │
-│  └───────────────────────────────────────────────────────────┘   │
+│  │  3. Launches Aspire AppHost with this environment var      │  │
+│  └────────────────────────────────────────────────────────────┘  │
 │                              │                                   │
 │                              │ Aspire starts child processes     │
 │                              ▼                                   │
