@@ -1,32 +1,256 @@
 # Aspire E2E Testing POC: NServiceBus ActivitySource Subscription
 
-This POC validates that we can reliably assert when a message has been processed across microservices using Aspire's telemetry pipeline - subscribing to NServiceBus ActivitySource events via OTLP.
+## Executive Summary
 
-## Architecture
+This POC demonstrates a **reliable, non-flaky approach to end-to-end testing** of distributed microservices that communicate via messaging (NServiceBus). Instead of polling the database hoping data has arrived, we **subscribe to the actual message processing events** emitted by NServiceBus through OpenTelemetry, allowing tests to assert **at exactly the right moment**.
+
+### The Problem We Solve
+
+In distributed systems with asynchronous messaging, a common testing challenge is: **"How do I know when a message has been fully processed before I assert?"**
+
+Traditional approaches have significant drawbacks:
+
+| Approach | Problem |
+|----------|---------|
+| `Task.Delay(5000)` | Arbitrary wait times. Too short = flaky tests. Too long = slow CI/CD. |
+| Database polling with retry | Race conditions, complex retry logic, still potentially flaky under load. |
+| In-memory test doubles | Doesn't test real infrastructure, misses integration issues. |
+
+### Our Solution
+
+We leverage **OpenTelemetry (OTLP)** - the same telemetry pipeline used in production for observability - to receive **real-time notifications** when messages are processed:
+
+```
+┌─────────────────────────────────────────────────────────────────────────────────┐
+│                              TEST PROCESS                                       │
+│  ┌─────────────────┐                           ┌─────────────────────────────┐  │
+│  │   Test Code     │                           │   OTLP Collector (gRPC)     │  │
+│  │                 │                           │                             │  │
+│  │  1. Send HTTP   │                           │  3. Receives "process       │  │
+│  │     request     │                           │     message" span from      │  │
+│  │                 │                           │     NServiceBus             │  │
+│  │  4. Assert DB   │◄──── Signal ─────────────│                             │  │
+│  │     (now safe!) │   (TaskCompletionSource)  │  "PongMessage processed!"   │  │
+│  └────────┬────────┘                           └──────────────▲──────────────┘  │
+│           │                                                   │                 │
+└───────────┼───────────────────────────────────────────────────┼─────────────────┘
+            │ HTTP                                               │ OTLP/gRPC
+            ▼                                                   │
+┌───────────────────────────────────────────────────────────────┼─────────────────┐
+│                         ASPIRE-MANAGED PROCESSES              │                 │
+│                                                               │                 │
+│  ┌─────────┐        ┌────────────────┐        ┌──────────────┴───┐             │
+│  │   API   │──Msg──►│ PingServiceBus │──Msg──►│  PongServiceBus  │             │
+│  └─────────┘        └───────┬────────┘        └────────┬─────────┘             │
+│                             │                          │                        │
+│                             ▼                          ▼                        │
+│                        ┌────────────────────────────────────┐                   │
+│                        │           SQL Server               │                   │
+│                        └────────────────────────────────────┘                   │
+└─────────────────────────────────────────────────────────────────────────────────┘
+```
+
+**Key insight**: NServiceBus emits OpenTelemetry spans for every message it processes. We intercept these spans in-process and use them as **synchronization signals** for our tests.
+
+---
+
+## Why This Approach Avoids Flakiness
+
+### The Flaky Database Polling Approach
+
+```csharp
+// ❌ FLAKY: Race condition between message processing and assertion
+await httpClient.PostAsync("/api/send-ping", content);
+
+// How long should we wait? Nobody knows!
+await Task.Delay(2000); // Too short on slow CI? Too long wastes time.
+
+// Or polling - complex and still racy
+for (int i = 0; i < 10; i++)
+{
+    var ping = await db.Pings.FindAsync(pingId);
+    if (ping != null) break;
+    await Task.Delay(500); // Still arbitrary!
+}
+```
+
+**Problems:**
+1. Message processing time varies (network latency, CPU load, database contention)
+2. CI/CD environments are slower and more variable than dev machines
+3. Under load, delays compound unpredictably
+4. You're guessing when processing completes
+
+### The Reliable OTLP Approach
+
+```csharp
+// ✅ RELIABLE: Wait for the actual processing event
+await httpClient.PostAsync("/api/send-ping", content);
+
+// Wait for NServiceBus to tell us "I finished processing PongMessage"
+await WaitForMessageProcessed<PongMessage>(timeout: TimeSpan.FromSeconds(60));
+
+// NOW we can safely assert - processing is guaranteed complete
+var pong = await db.Pongs.FindAsync(pongId);
+Assert.NotNull(pong);
+```
+
+**Why this works:**
+1. **Event-driven, not time-based**: We wait for the *actual event* (message processed), not an arbitrary duration
+2. **Deterministic**: The signal comes *after* the handler commits to the database
+3. **Self-adjusting**: Fast systems complete quickly; slow systems just take longer (up to timeout)
+4. **Observable**: On timeout, we can dump all received spans for debugging
+
+---
+
+## When Do Assertions Happen?
+
+The timing is **precise and deterministic**:
+
+```
+Timeline:
+─────────────────────────────────────────────────────────────────────────────────►
+
+1. Test sends HTTP request
+   │
+   ▼
+2. API receives request, sends NServiceBus message
+   │
+   ▼
+3. PingServiceBus receives message, processes it, saves to DB, sends PongMessage
+   │
+   │  ──► OTLP span emitted: "process message" (PingMessage)
+   ▼
+4. PongServiceBus receives PongMessage, processes it, saves to DB
+   │
+   │  ──► OTLP span emitted: "process message" (PongMessage)  ◄─── TEST RECEIVES THIS
+   ▼
+5. Test's TaskCompletionSource is signaled
+   │
+   ▼
+6. Test proceeds to assertions ◄─── DATABASE IS GUARANTEED TO HAVE THE DATA
+```
+
+**The span is emitted AFTER the handler completes successfully**, which means:
+- The database transaction has been committed
+- Any outgoing messages have been sent
+- It's safe to query the database
+
+---
+
+## How the OTLP Collector Connects to the System
+
+### Connection Architecture
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                     TEST PROCESS (xUnit)                        │
+│                                                                 │
+│  ┌───────────────────────────────────────────────────────────┐  │
+│  │  AspireFixture (IClassFixture - one per test class)       │  │
+│  │                                                           │  │
+│  │  1. Starts OTLP gRPC server on random port (e.g., :54321) │  │
+│  │  2. Sets OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:54321│  │
+│  │  3. Launches Aspire AppHost with this environment var     │  │
+│  └───────────────────────────────────────────────────────────┘  │
+│                              │                                  │
+│                              │ Aspire starts child processes    │
+│                              ▼                                  │
+│  ┌───────────────────────────────────────────────────────────┐  │
+│  │  Child Processes (API, PingServiceBus, PongServiceBus)    │  │
+│  │                                                           │  │
+│  │  - Inherit OTEL_EXPORTER_OTLP_ENDPOINT from environment   │  │
+│  │  - NServiceBus.EnableOpenTelemetry() registers spans      │  │
+│  │  - OpenTelemetry SDK exports spans via OTLP/gRPC          │  │
+│  │                                                           │  │
+│  │         ┌─────────────────────────────────────────┐       │  │
+│  │         │  Span: "process message"                │       │  │
+│  │         │  Attributes:                            │       │  │
+│  │         │    nservicebus.enclosed_message_types:  │       │  │
+│  │         │      "PingPong.Messages.PongMessage"    │       │  │
+│  │         └─────────────────────────────────────────┘       │  │
+│  └───────────────────────────────────────────────────────────┘  │
+│                              │                                  │
+│                              │ OTLP/gRPC (automatic export)     │
+│                              ▼                                  │
+│  ┌───────────────────────────────────────────────────────────┐  │
+│  │  OtlpTraceCollector (gRPC TraceService implementation)    │  │
+│  │                                                           │  │
+│  │  - Receives ExportTraceServiceRequest                     │  │
+│  │  - Fires SpanReceived event for each span                 │  │
+│  │  - Test subscribes and signals TaskCompletionSource       │  │
+│  └───────────────────────────────────────────────────────────┘  │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### Key Configuration Points
+
+**1. OTLP Collector Setup (in test fixture):**
+```csharp
+// Start gRPC server on random available port
+builder.WebHost.ConfigureKestrel(options =>
+{
+    options.Listen(IPAddress.Loopback, 0, listenOptions =>
+    {
+        listenOptions.Protocols = HttpProtocols.Http2; // Required for gRPC
+    });
+});
+builder.Services.AddGrpc();
+builder.Services.AddSingleton(collector);
+app.MapGrpcService<OtlpTraceCollector>();
+```
+
+**2. Passing OTLP Endpoint to Aspire:**
+```csharp
+var appHost = await DistributedApplicationTestingBuilder
+    .CreateAsync<TAppHost>([$"OTEL_EXPORTER_OTLP_ENDPOINT={otlpEndpoint}"]);
+```
+
+**3. ServiceDefaults Configuration (in each service):**
+```csharp
+builder.Services.AddOpenTelemetry()
+    .WithTracing(tracing =>
+    {
+        tracing.AddSource("NServiceBus.Core");  // Subscribe to NServiceBus spans
+        tracing.AddOtlpExporter();              // Export to OTEL_EXPORTER_OTLP_ENDPOINT
+    });
+```
+
+**4. NServiceBus OpenTelemetry Integration:**
+```csharp
+endpointConfiguration.EnableOpenTelemetry();  // Emit spans for message processing
+```
+
+---
+
+## Project Structure
 
 ```
 PingPong.sln
 ├── src/
 │   ├── PingPong.Messages/          # Messages: PingMessage, PongMessage, UpdatePingMessage, PingUpdatedMessage
-│   ├── PingPong.Data/              # EF Core DbContext, Ping & Pong entities
-│   ├── PingPong.ServiceDefaults/   # Shared config with OTLP exporter
+│   ├── PingPong.Data/              # EF Core DbContext, Ping & Pong entities (with UpdatedAt)
+│   ├── PingPong.ServiceDefaults/   # Shared OpenTelemetry + OTLP exporter config
 │   ├── PingPong.Api/               # GraphQL API (HotChocolate), send-only NServiceBus
-│   ├── PingPong.PingServiceBus/    # NServiceBus endpoint, handles PingMessage/UpdatePingMessage
-│   ├── PingPong.PongServiceBus/    # NServiceBus endpoint, handles PongMessage/PingUpdatedMessage
+│   ├── PingPong.PingServiceBus/    # Handles PingMessage/UpdatePingMessage, sends Pong/PingUpdated
+│   ├── PingPong.PongServiceBus/    # Handles PongMessage/PingUpdatedMessage
 │   └── PingPong.AppHost/           # Aspire orchestrator with SQL Server container
 └── tests/
     └── PingPong.Tests/
-        ├── EndToEndTest.cs         # Base class with shared IClassFixture
-        ├── PingPongEndToEndTests.cs # Test class with 3 E2E tests
-        └── OtlpTraceCollector.cs   # gRPC OTLP receiver
+        ├── EndToEndTest.cs         # Base class with OTLP integration + helper methods
+        ├── PingPongEndToEndTests.cs # 3 E2E tests demonstrating the pattern
+        └── OtlpTraceCollector.cs   # gRPC OTLP receiver implementation
 ```
 
-## Message Flow
+---
+
+## Message Flows
+
+### Flow 1: Create Ping → Pong
 
 ```
 ┌─────────┐   GraphQL    ┌────────────────┐                ┌────────────────┐
 │   API   │──mutation───►│ PingServiceBus │───PongMessage─►│ PongServiceBus │
-│(send-   │              │                │                │                │
+│(send-   │  "sendPing"  │                │                │                │
 │ only)   │              │  stores Ping   │                │  stores Pong   │
 └─────────┘              └────────────────┘                └────────────────┘
                                 │                                  │
@@ -34,38 +258,21 @@ PingPong.sln
                                            ▼    ▼
                                       ┌──────────────┐
                                       │  SQL Server  │
-                                      │  (pingpongdb)│
                                       └──────────────┘
 ```
 
-### Update Flow (updatePing mutation)
+### Flow 2: Update Ping → Update Pong
 
 ```
-┌─────────┐  GraphQL     ┌────────────────┐                    ┌────────────────┐
-│   API   │──mutation───►│ PingServiceBus │──PingUpdatedMsg──►│ PongServiceBus │
-│(send-   │              │                │                    │                │
-│ only)   │              │ updates Ping   │                    │ updates Pong   │
-└─────────┘              └────────────────┘                    └────────────────┘
+┌─────────┐  GraphQL      ┌────────────────┐                     ┌────────────────┐
+│   API   │──mutation────►│ PingServiceBus │──PingUpdatedMsg───►│ PongServiceBus │
+│(send-   │ "updatePing"  │                │                     │                │
+│ only)   │               │ updates Ping   │                     │ updates Pong   │
+└─────────┘               │ (UpdatedAt)    │                     │ (UpdatedAt)    │
+                          └────────────────┘                     └────────────────┘
 ```
 
-## How It Works
-
-1. **Test fixture starts an in-process OTLP gRPC collector** that receives trace data
-2. **Aspire launches API/PingServiceBus/PongServiceBus** as separate processes with OTLP endpoint configured
-3. **NServiceBus `EnableOpenTelemetry()`** emits spans to the OTLP exporter
-4. **Spans flow from child processes → OTLP collector → test assertions**
-5. **Test uses `TaskCompletionSource`** to wait for the "process message" span with message attributes
-6. **Shared fixture** keeps Aspire app running across all tests in the class for speed
-
-## Key Success Criteria Met
-
-- **No arbitrary `Task.Delay`** - Uses OTLP + TaskCompletionSource with timeout
-- **Uses Aspire's telemetry pipeline** - OTLP exporter in ServiceDefaults
-- **Full Ping-Pong flow** - API → PingServiceBus → PongServiceBus with database persistence
-- **Shared test infrastructure** - Uses IClassFixture to share Aspire app across tests
-- **Fast feedback** - Tests complete in ~30 seconds (including SQL Server container startup)
-- **Fails fast on timeout** - 30-60s timeout with diagnostic output showing received spans
-- **Easy to write new tests** - Just inherit from `EndToEndTest<TAppHost>`
+---
 
 ## Writing E2E Tests
 
@@ -84,13 +291,13 @@ public sealed class PingPongEndToEndTests : EndToEndTest<Projects.PingPong_AppHo
         var mutation = "mutation { sendPing { id sentAt } }";
         var timeout = TimeSpan.FromSeconds(30);
 
-        // Act
+        // Act - sends mutation AND waits for PingMessage to be processed
         var pingId = await SendMutationAndWaitForMessage<PingMessage, Guid>(
             mutation,
             mutationResult => mutationResult.GetProperty("sendPing").GetProperty("id").GetGuid(),
             timeout);
 
-        // Assert
+        // Assert - safe to query DB because we waited for processing to complete
         await using var db = CreateDbContext();
         var ping = await db.Pings.FindAsync(pingId);
         Assert.NotNull(ping);
@@ -104,13 +311,13 @@ public sealed class PingPongEndToEndTests : EndToEndTest<Projects.PingPong_AppHo
         var mutation = "mutation { sendPing { id sentAt } }";
         var timeout = TimeSpan.FromSeconds(60);
 
-        // Act
+        // Act - wait for PongMessage (the LAST message in the chain)
         var pingId = await SendMutationAndWaitForMessage<PongMessage, Guid>(
             mutation,
             mutationResult => mutationResult.GetProperty("sendPing").GetProperty("id").GetGuid(),
             timeout);
 
-        // Assert
+        // Assert - entire flow is complete
         await using var db = CreateDbContext();
         var pong = await db.Pongs.FirstOrDefaultAsync(p => p.PingId == pingId);
         Assert.NotNull(pong);
@@ -120,7 +327,7 @@ public sealed class PingPongEndToEndTests : EndToEndTest<Projects.PingPong_AppHo
     [Fact]
     public async Task Update_ping_should_update_both_ping_and_pong()
     {
-        // Arrange - seed ping and pong in database
+        // Arrange - seed existing data
         var pingId = Guid.NewGuid();
         var pongId = Guid.NewGuid();
 
@@ -134,13 +341,13 @@ public sealed class PingPongEndToEndTests : EndToEndTest<Projects.PingPong_AppHo
         var mutation = $"mutation {{ updatePing(pingId: \"{pingId}\") {{ pingId sentAt }} }}";
         var timeout = TimeSpan.FromSeconds(60);
 
-        // Act
+        // Act - wait for PingUpdatedMessage (processed by PongServiceBus)
         await SendMutationAndWaitForMessage<PingUpdatedMessage, Guid>(
             mutation,
             mutationResult => mutationResult.GetProperty("updatePing").GetProperty("pingId").GetGuid(),
             timeout);
 
-        // Assert
+        // Assert - both entities updated
         await using var dbAssert = CreateDbContext();
         var ping = await dbAssert.Pings.FindAsync(pingId);
         Assert.NotNull(ping?.UpdatedAt);
@@ -151,17 +358,19 @@ public sealed class PingPongEndToEndTests : EndToEndTest<Projects.PingPong_AppHo
 }
 ```
 
-### Available Methods in EndToEndTest
+### Available Helper Methods
 
 | Method | Description |
 |--------|-------------|
-| `SendMutationAndWaitForMessage<TMessage, TResult>(mutation, resultSelector, timeout)` | Sends GraphQL mutation, waits for message processing, returns extracted result |
-| `SendGraphQLMutation<TResult>(mutation, resultSelector)` | Sends GraphQL mutation and extracts result using selector |
-| `WaitForMessageProcessed<TMessage>(timeout)` | Waits for a message of type `TMessage` to be processed |
-| `WaitForSpan(predicate, timeout)` | Waits for any span matching the predicate |
-| `AssertSpanSucceeded(span)` | Asserts the span has no error status |
-| `CreateDbContext()` | Creates a DbContext for database assertions |
-| `CreateHttpClient(resourceName)` | Creates an HTTP client for calling a resource |
+| `SendMutationAndWaitForMessage<TMessage, TResult>(...)` | Sends GraphQL mutation, waits for message processing, returns extracted result |
+| `SendGraphQLMutation<TResult>(...)` | Sends GraphQL mutation and extracts result (no waiting) |
+| `WaitForMessageProcessed<TMessage>(timeout)` | Waits for a specific message type to be processed |
+| `WaitForSpan(predicate, timeout)` | Waits for any span matching custom predicate |
+| `AssertSpanSucceeded(span)` | Asserts span has no error status |
+| `CreateDbContext()` | Creates DbContext for database assertions |
+| `CreateHttpClient(resourceName)` | Creates HTTP client for calling Aspire resources |
+
+---
 
 ## Prerequisites
 
@@ -175,70 +384,80 @@ public sealed class PingPongEndToEndTests : EndToEndTest<Projects.PingPong_AppHo
 dotnet test
 ```
 
+Tests complete in ~30 seconds (including SQL Server container startup). Subsequent runs are faster due to container reuse.
+
+---
+
 ## Key Implementation Details
 
-### EndToEndTest Base Class with Shared Fixture
+### Span Detection Logic
 
-The `EndToEndTest<TAppHost>` class uses xUnit's `IClassFixture` pattern:
-- **AspireFixture** starts the OTLP collector and Aspire app once per test class
-- **Shared infrastructure** means tests run faster (no container restart per test)
-- **DbContext factory** for database assertions
-- **Span collection** continues throughout all tests in the class
-
-### ServiceDefaults (OTLP Export)
+The test identifies successful message processing by matching:
+- **Span name**: `"process message"` (emitted by NServiceBus)
+- **Attribute**: `nservicebus.enclosed_message_types` contains the message type name
+- **Status**: Not error (indicates successful processing)
 
 ```csharp
-builder.Services.AddOpenTelemetry()
-    .WithTracing(tracing =>
-    {
-        tracing.AddSource("NServiceBus.Core");
-        tracing.AddOtlpExporter();
-    });
-```
-
-### OTLP Trace Collector
-
-The test hosts a gRPC server implementing the OTLP TraceService that captures spans:
-
-```csharp
-public class OtlpTraceCollector : TraceService.TraceServiceBase
+private static bool IsMessageProcessSpan(Span span, string messageTypeName)
 {
-    public event Action<Span>? SpanReceived;
+    if (!span.Name.Equals("process message", StringComparison.OrdinalIgnoreCase))
+        return false;
 
-    public override Task<ExportTraceServiceResponse> Export(
-        ExportTraceServiceRequest request, ServerCallContext context)
-    {
-        foreach (var span in request.ResourceSpans.SelectMany(...))
-        {
-            SpanReceived?.Invoke(span);
-        }
-        return Task.FromResult(new ExportTraceServiceResponse());
-    }
+    var hasMatchingMessageType = span.Attributes.Any(a =>
+        a.Key.Equals("nservicebus.enclosed_message_types", StringComparison.OrdinalIgnoreCase) &&
+        a.Value?.StringValue?.Contains(messageTypeName, StringComparison.OrdinalIgnoreCase) == true);
+
+    var isSuccess = span.Status == null || span.Status.Code != Status.Types.StatusCode.Error;
+
+    return hasMatchingMessageType && isSuccess;
 }
 ```
 
-### Span Detection
+### Timeout and Diagnostics
 
-The test identifies successful message processing by matching:
-- Span name: `"process message"`
-- Attribute: `nservicebus.enclosed_message_types` contains the message type name
-- Status: Not error
+If a test times out waiting for a message, it provides diagnostic output showing all spans received during the wait period:
+
+```
+Timeout waiting for message 'PongMessage' to be processed.
+
+Received spans:
+  - process message [nservicebus.enclosed_message_types=PingPong.Messages.PingMessage]
+  - POST /graphql [http.status_code=200]
+  - ...
+```
+
+This helps identify whether the message was never sent, got stuck, or was processed with a different name.
+
+---
 
 ## What This Proves
 
-That we can use Aspire's OTLP telemetry pipeline to subscribe to NServiceBus ActivitySource events across process boundaries, enabling reliable end-to-end test assertions without:
-- Arbitrary `Task.Delay` calls
-- External telemetry systems (Jaeger, Application Insights, etc.)
-- Flaky timing-based assertions
-- Boilerplate infrastructure code in each test
+This POC demonstrates that we can build **reliable, non-flaky E2E tests** for distributed messaging systems by:
+
+1. **Reusing production telemetry infrastructure** (OpenTelemetry) for test synchronization
+2. **Eliminating arbitrary delays** - tests complete as fast as the system allows
+3. **Providing deterministic assertions** - we assert only after processing is confirmed complete
+4. **Maintaining real integration** - tests exercise actual NServiceBus, SQL Server, and process boundaries
+5. **Enabling simple test authoring** - the complexity is hidden in the base class
+
+### Business Value
+
+| Stakeholder | Benefit |
+|-------------|---------|
+| **Developers** | Write tests that don't randomly fail; clear, readable test code |
+| **QA** | Reliable test suite that can be trusted; faster feedback on failures |
+| **Architects** | Pattern that scales to complex message flows; uses standard OpenTelemetry |
+| **DevOps** | Faster CI/CD pipelines (no padding with delays); fewer flaky test investigations |
+| **Management** | Higher confidence in releases; reduced time debugging test infrastructure |
+
+---
 
 ## Features Demonstrated
 
-- **NServiceBus messaging** with LearningTransport and OpenTelemetry
-- **Ping-Pong message flow** with send-only API endpoint and receive-capable services
-- **Update flow** with seeded data demonstrating existing entity updates across services
+- **NServiceBus messaging** with LearningTransport and OpenTelemetry integration
+- **Multi-hop message flows** (API → Service A → Service B)
+- **Update flows** with seeded data demonstrating entity updates across services
 - **GraphQL API** using HotChocolate with mutations (sendPing, updatePing)
-- **SQL Server test container** with Entity Framework Core
-- **Database persistence** for both Ping and Pong messages
-- **Shared test fixture** using xUnit IClassFixture for efficient test runs
-- **Full E2E flow**: API → PingServiceBus → PongServiceBus → Database → Assertion
+- **SQL Server test container** managed by Aspire with automatic lifecycle
+- **Shared test fixture** using xUnit IClassFixture for efficient test execution
+- **Full E2E assertion safety**: API → Message Processing → Database → Verified
