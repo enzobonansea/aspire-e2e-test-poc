@@ -10,12 +10,12 @@ var learningTransportPath = Path.Combine(Path.GetTempPath(), "pingpong-learningt
 var sqlServer = builder.AddSqlServer("sql")
     .AddDatabase("pingpongdb");
 
-var receiver = builder.AddProject<Projects.PingPong_Receiver>("receiver")
+var pingServiceBus = builder.AddProject<Projects.PingPong_PingServiceBus>("pingservicebus")
     .WithReference(sqlServer)
     .WaitFor(sqlServer)
     .WithEnvironment("LEARNING_TRANSPORT_PATH", learningTransportPath);
 
-var sender = builder.AddProject<Projects.PingPong_Sender>("sender")
+var pongServiceBus = builder.AddProject<Projects.PingPong_PongServiceBus>("pongservicebus")
     .WithReference(sqlServer)
     .WaitFor(sqlServer)
     .WithEnvironment("LEARNING_TRANSPORT_PATH", learningTransportPath);
@@ -28,8 +28,8 @@ var api = builder.AddProject<Projects.PingPong_Api>("api")
 // If OTLP endpoint is configured, pass it to the services
 if (!string.IsNullOrEmpty(otlpEndpoint))
 {
-    receiver.WithEnvironment("OTEL_EXPORTER_OTLP_ENDPOINT", otlpEndpoint);
-    sender.WithEnvironment("OTEL_EXPORTER_OTLP_ENDPOINT", otlpEndpoint);
+    pingServiceBus.WithEnvironment("OTEL_EXPORTER_OTLP_ENDPOINT", otlpEndpoint);
+    pongServiceBus.WithEnvironment("OTEL_EXPORTER_OTLP_ENDPOINT", otlpEndpoint);
     api.WithEnvironment("OTEL_EXPORTER_OTLP_ENDPOINT", otlpEndpoint);
 }
 

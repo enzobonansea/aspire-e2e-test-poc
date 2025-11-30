@@ -3,7 +3,7 @@ using NServiceBus;
 using PingPong.Data;
 using PingPong.Messages;
 
-namespace PingPong.Sender;
+namespace PingPong.PongServiceBus;
 
 public class PongMessageHandler : IHandleMessages<PongMessage>
 {

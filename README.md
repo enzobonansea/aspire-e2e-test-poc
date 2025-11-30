@@ -11,13 +11,12 @@ PingPong.sln
 │   ├── PingPong.Data/              # EF Core DbContext, Ping & Pong entities
 │   ├── PingPong.ServiceDefaults/   # Shared config with OTLP exporter
 │   ├── PingPong.Api/               # GraphQL API (HotChocolate), send-only NServiceBus
-│   ├── PingPong.Sender/            # NServiceBus endpoint, handles PongMessage
-│   ├── PingPong.Receiver/          # NServiceBus endpoint, handles PingMessage, sends Pong
+│   ├── PingPong.PingServiceBus/    # NServiceBus endpoint, handles PingMessage, sends Pong
+│   ├── PingPong.PongServiceBus/    # NServiceBus endpoint, handles PongMessage
 │   └── PingPong.AppHost/           # Aspire orchestrator with SQL Server container
 └── tests/
     └── PingPong.Tests/
         ├── EndToEndTest.cs         # Base class with shared IClassFixture
-        ├── AspireFixture.cs        # Shared fixture for Aspire app lifecycle
         ├── PingPongEndToEndTests.cs # Test class with 2 E2E tests
         └── OtlpTraceCollector.cs   # gRPC OTLP receiver
 ```
@@ -25,24 +24,24 @@ PingPong.sln
 ## Message Flow
 
 ```
-┌─────────┐   GraphQL    ┌──────────────┐   PingMessage   ┌──────────────┐
-│   API   │──mutation───►│   Receiver   │────────────────►│   Sender     │
-│(send-   │              │              │◄───PongMessage──│              │
-│ only)   │              │ stores Ping  │                 │ stores Pong  │
-└─────────┘              └──────────────┘                 └──────────────┘
-                              │                                  │
-                              └──────────┐    ┌──────────────────┘
-                                         ▼    ▼
-                                    ┌──────────────┐
-                                    │  SQL Server  │
-                                    │  (pingpongdb)│
-                                    └──────────────┘
+┌─────────┐   GraphQL    ┌────────────────┐                ┌────────────────┐
+│   API   │──mutation───►│ PingServiceBus │───PongMessage─►│ PongServiceBus │
+│(send-   │              │                │                │                │
+│ only)   │              │  stores Ping   │                │  stores Pong   │
+└─────────┘              └────────────────┘                └────────────────┘
+                                │                                  │
+                                └──────────┐    ┌──────────────────┘
+                                           ▼    ▼
+                                      ┌──────────────┐
+                                      │  SQL Server  │
+                                      │  (pingpongdb)│
+                                      └──────────────┘
 ```
 
 ## How It Works
 
 1. **Test fixture starts an in-process OTLP gRPC collector** that receives trace data
-2. **Aspire launches API/Sender/Receiver** as separate processes with OTLP endpoint configured
+2. **Aspire launches API/PingServiceBus/PongServiceBus** as separate processes with OTLP endpoint configured
 3. **NServiceBus `EnableOpenTelemetry()`** emits spans to the OTLP exporter
 4. **Spans flow from child processes → OTLP collector → test assertions**
 5. **Test uses `TaskCompletionSource`** to wait for the "process message" span with message attributes
@@ -52,7 +51,7 @@ PingPong.sln
 
 - **No arbitrary `Task.Delay`** - Uses OTLP + TaskCompletionSource with timeout
 - **Uses Aspire's telemetry pipeline** - OTLP exporter in ServiceDefaults
-- **Full Ping-Pong flow** - API → Receiver → Sender with database persistence
+- **Full Ping-Pong flow** - API → PingServiceBus → PongServiceBus with database persistence
 - **Shared test infrastructure** - Uses IClassFixture to share Aspire app across tests
 - **Fast feedback** - Tests complete in ~30 seconds (including SQL Server container startup)
 - **Fails fast on timeout** - 30-60s timeout with diagnostic output showing received spans
@@ -193,4 +192,4 @@ That we can use Aspire's OTLP telemetry pipeline to subscribe to NServiceBus Act
 - **SQL Server test container** with Entity Framework Core
 - **Database persistence** for both Ping and Pong messages
 - **Shared test fixture** using xUnit IClassFixture for efficient test runs
-- **Full E2E flow**: API → Receiver → Sender → Database → Assertion
+- **Full E2E flow**: API → PingServiceBus → PongServiceBus → Database → Assertion

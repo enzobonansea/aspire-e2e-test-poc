@@ -19,9 +19,9 @@ if (!string.IsNullOrEmpty(learningTransportPath))
     transport.StorageDirectory(learningTransportPath);
 }
 
-// Configure routing to send PingMessage to the Receiver
+// Configure routing to send PingMessage to PingServiceBus
 var routing = transport.Routing();
-routing.RouteToEndpoint(typeof(PingMessage), "PingPong.Receiver");
+routing.RouteToEndpoint(typeof(PingMessage), "PingPong.PingServiceBus");
 
 builder.UseNServiceBus(endpointConfiguration);
 

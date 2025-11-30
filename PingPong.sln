@@ -9,9 +9,9 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "PingPong.Messages", "src\Pi
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "PingPong.ServiceDefaults", "src\PingPong.ServiceDefaults\PingPong.ServiceDefaults.csproj", "{3FDE59AF-07BF-4DF0-9B88-F3C45535538C}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "PingPong.Sender", "src\PingPong.Sender\PingPong.Sender.csproj", "{C3C10940-90F5-4745-AE17-321E81034481}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "PingPong.PongServiceBus", "src\PingPong.PongServiceBus\PingPong.PongServiceBus.csproj", "{C3C10940-90F5-4745-AE17-321E81034481}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "PingPong.Receiver", "src\PingPong.Receiver\PingPong.Receiver.csproj", "{BB734E63-CBEA-4C61-AD0C-55482FAEAE24}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "PingPong.PingServiceBus", "src\PingPong.PingServiceBus\PingPong.PingServiceBus.csproj", "{BB734E63-CBEA-4C61-AD0C-55482FAEAE24}"
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "PingPong.AppHost", "src\PingPong.AppHost\PingPong.AppHost.csproj", "{F9052C48-FF5F-4173-9710-3D239E0E31F2}"
 EndProject

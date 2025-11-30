@@ -17,8 +17,8 @@
 
   <ItemGroup>
     <ProjectReference Include="..\PingPong.Api\PingPong.Api.csproj" />
-    <ProjectReference Include="..\PingPong.Sender\PingPong.Sender.csproj" />
-    <ProjectReference Include="..\PingPong.Receiver\PingPong.Receiver.csproj" />
+    <ProjectReference Include="..\PingPong.PongServiceBus\PingPong.PongServiceBus.csproj" />
+    <ProjectReference Include="..\PingPong.PingServiceBus\PingPong.PingServiceBus.csproj" />
   </ItemGroup>
 
 </Project>

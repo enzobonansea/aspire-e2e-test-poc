@@ -2,7 +2,7 @@ using Microsoft.Extensions.Logging;
 using PingPong.Data;
 using PingPong.Messages;
 
-namespace PingPong.Receiver;
+namespace PingPong.PingServiceBus;
 
 public class PingMessageHandler : IHandleMessages<PingMessage>
 {
@@ -32,7 +32,7 @@ public class PingMessageHandler : IHandleMessages<PingMessage>
 
         _logger.LogInformation("Stored ping {Id} in database", ping.Id);
 
-        // Send Pong to Sender
+        // Send Pong to PongServiceBus
         var pongMessage = new PongMessage
         {
             PingId = message.Id
@@ -40,6 +40,6 @@ public class PingMessageHandler : IHandleMessages<PingMessage>
 
         await context.Send(pongMessage);
 
-        _logger.LogInformation("Sent PongMessage to Sender for ping {PingId}", message.Id);
+        _logger.LogInformation("Sent PongMessage to PongServiceBus for ping {PingId}", message.Id);
     }
 }

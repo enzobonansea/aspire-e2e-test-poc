@@ -1,5 +1,4 @@
 using PingPong.Data;
-using PingPong.Messages;
 
 var builder = Host.CreateApplicationBuilder(args);
 
@@ -8,7 +7,7 @@ builder.AddServiceDefaults();
 // Add SQL Server DbContext
 builder.AddSqlServerDbContext<PingPongDbContext>("pingpongdb");
 
-var endpointConfiguration = new EndpointConfiguration("PingPong.Receiver");
+var endpointConfiguration = new EndpointConfiguration("PingPong.PongServiceBus");
 endpointConfiguration.UseSerialization<SystemJsonSerializer>();
 endpointConfiguration.EnableOpenTelemetry();
 
@@ -19,10 +18,6 @@ if (!string.IsNullOrEmpty(learningTransportPath))
 {
     transport.StorageDirectory(learningTransportPath);
 }
-
-// Configure routing to send PongMessage to the Sender
-var routing = transport.Routing();
-routing.RouteToEndpoint(typeof(PongMessage), "PingPong.Sender");
 
 builder.UseNServiceBus(endpointConfiguration);
 
