@@ -29,7 +29,7 @@ We leverage **OpenTelemetry (OTLP)** - the same telemetry pipeline used in produ
 │  │  1. Send HTTP   │                           │  3. Receives "process       │  │
 │  │     request     │                           │     message" span from      │  │
 │  │                 │                           │     NServiceBus             │  │
-│  │  4. Assert DB   │◄──── Signal ─────────────│                             │  │
+│  │  4. Assert DB   │◄──── Signal ───────────── │                             │  │
 │  │     (now safe!) │   (TaskCompletionSource)  │  "PongMessage processed!"   │  │
 │  └────────┬────────┘                           └──────────────▲──────────────┘  │
 │           │                                                   │                 │
@@ -39,9 +39,9 @@ We leverage **OpenTelemetry (OTLP)** - the same telemetry pipeline used in produ
 ┌───────────────────────────────────────────────────────────────┼─────────────────┐
 │                         ASPIRE-MANAGED PROCESSES              │                 │
 │                                                               │                 │
-│  ┌─────────┐        ┌────────────────┐        ┌──────────────┴───┐             │
-│  │   API   │──Msg──►│ PingServiceBus │──Msg──►│  PongServiceBus  │             │
-│  └─────────┘        └───────┬────────┘        └────────┬─────────┘             │
+│  ┌─────────┐        ┌────────────────┐        ┌───────────────┴──┐              │
+│  │   API   │──Msg──►│ PingServiceBus │──Msg──►│  PongServiceBus  │              │
+│  └─────────┘        └───────┬────────┘        └────────┬─────────┘              │
 │                             │                          │                        │
 │                             ▼                          ▼                        │
 │                        ┌────────────────────────────────────┐                   │
