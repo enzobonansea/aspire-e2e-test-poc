@@ -1,0 +1,48 @@
+## .NET
+bin/
+obj/
+*.user
+*.userosscache
+*.sln.docstates
+
+## NuGet
+*.nupkg
+*.snupkg
+.nuget/
+packages/
+
+## Visual Studio
+.vs/
+*.suo
+*.cache
+
+## Rider
+.idea/
+
+## Build results
+[Dd]ebug/
+[Rr]elease/
+x64/
+x86/
+[Aa][Rr][Mm]/
+[Aa][Rr][Mm]64/
+bld/
+[Bb]in/
+[Oo]bj/
+[Ll]og/
+[Ll]ogs/
+
+## Test Results
+[Tt]est[Rr]esult*/
+[Bb]uild[Ll]og.*
+TestResult.xml
+coverage*.json
+coverage*.xml
+coverage*.info
+
+## NServiceBus LearningTransport
+.learningtransport/
+
+## OS generated files
+.DS_Store
+Thumbs.db
