@@ -8,14 +8,16 @@ This POC validates that we can reliably assert when a message has been processed
 PingPong.sln
 ├── src/
 │   ├── PingPong.Messages/          # Contains PingMessage : IMessage
+│   ├── PingPong.Data/              # EF Core DbContext and Ping entity
 │   ├── PingPong.ServiceDefaults/   # Shared config with OTLP exporter
+│   ├── PingPong.Api/               # GraphQL API (HotChocolate) with mutation
 │   ├── PingPong.Sender/            # NServiceBus endpoint, sends PingMessage
-│   ├── PingPong.Receiver/          # NServiceBus endpoint, handles PingMessage
-│   └── PingPong.AppHost/           # Aspire orchestrator
+│   ├── PingPong.Receiver/          # NServiceBus endpoint, handles and stores pings
+│   └── PingPong.AppHost/           # Aspire orchestrator with SQL Server container
 └── tests/
     └── PingPong.Tests/
         ├── EndToEndTest.cs         # Abstract base class (infrastructure)
-        ├── PingPongEndToEndTests.cs # Simple test class
+        ├── PingPongEndToEndTests.cs # Test class with 2 E2E tests
         └── OtlpTraceCollector.cs   # gRPC OTLP receiver
 ```
 
@@ -46,13 +48,45 @@ public class PingPongEndToEndTests : EndToEndTest<Projects.PingPong_AppHost>
     [Fact]
     public async Task Ping_message_should_be_processed()
     {
-        // Arrange
-        var timeout = TimeSpan.FromSeconds(30);
+        var timeout = TimeSpan.FromSeconds(120);
 
-        // Act & Assert
         var span = await WaitForMessageProcessed<PingMessage>(timeout);
 
         AssertSpanSucceeded(span);
+    }
+
+    [Fact]
+    public async Task Ping_sent_via_graphql_should_be_stored_in_database()
+    {
+        var timeout = TimeSpan.FromSeconds(120);
+        using var httpClient = CreateHttpClient("api");
+
+        // Send GraphQL mutation
+        var graphqlQuery = new { query = "mutation { sendPing { id sentAt } }" };
+        var content = new StringContent(
+            JsonSerializer.Serialize(graphqlQuery),
+            Encoding.UTF8,
+            "application/json");
+        var response = await httpClient.PostAsync("/graphql", content);
+        var responseContent = await response.Content.ReadAsStringAsync();
+        var jsonResponse = JsonSerializer.Deserialize<JsonElement>(responseContent);
+        var pingId = jsonResponse.GetProperty("data").GetProperty("sendPing").GetProperty("id").GetGuid();
+
+        // Wait for message to be processed
+        var span = await WaitForMessageProcessed<PingMessage>(timeout);
+        AssertSpanSucceeded(span);
+
+        // Assert ping is stored in database
+        var connectionString = await GetConnectionStringAsync("pingpongdb");
+        var options = new DbContextOptionsBuilder<PingPongDbContext>()
+            .UseSqlServer(connectionString)
+            .Options;
+
+        await using var dbContext = new PingPongDbContext(options);
+        var storedPing = await dbContext.Pings.FindAsync(pingId);
+
+        Assert.NotNull(storedPing);
+        Assert.NotNull(storedPing.ReceivedAt);
     }
 }
 ```
@@ -64,6 +98,8 @@ public class PingPongEndToEndTests : EndToEndTest<Projects.PingPong_AppHost>
 | `WaitForMessageProcessed<TMessage>(timeout)` | Waits for a message of type `TMessage` to be processed |
 | `WaitForSpan(predicate, timeout)` | Waits for any span matching the predicate |
 | `AssertSpanSucceeded(span)` | Asserts the span has no error status |
+| `CreateHttpClient(resourceName)` | Creates an HTTP client for calling a resource |
+| `GetConnectionStringAsync(resourceName)` | Gets the connection string for a resource |
 | `App` | Access to the Aspire `DistributedApplication` |
 | `ReceivedSpans` | All spans received for custom assertions |
 
@@ -71,6 +107,7 @@ public class PingPongEndToEndTests : EndToEndTest<Projects.PingPong_AppHost>
 
 - .NET 9.0 SDK
 - Aspire workload (`dotnet workload install aspire`)
+- Docker (for SQL Server container)
 
 ## Running the Tests
 
@@ -134,3 +171,10 @@ That we can use Aspire's OTLP telemetry pipeline to subscribe to NServiceBus Act
 - External telemetry systems (Jaeger, Application Insights, etc.)
 - Flaky timing-based assertions
 - Boilerplate infrastructure code in each test
+
+## Features Demonstrated
+
+- **NServiceBus messaging** with LearningTransport and OpenTelemetry
+- **GraphQL API** using HotChocolate with mutations
+- **SQL Server test container** with Entity Framework Core
+- **Full E2E flow**: API → NServiceBus message → Handler → Database → Assertion

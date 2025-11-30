@@ -12,9 +12,11 @@
 
   <ItemGroup>
     <PackageReference Include="Aspire.Hosting.AppHost" Version="9.0.0" />
+    <PackageReference Include="Aspire.Hosting.SqlServer" Version="9.0.0" />
   </ItemGroup>
 
   <ItemGroup>
+    <ProjectReference Include="..\PingPong.Api\PingPong.Api.csproj" />
     <ProjectReference Include="..\PingPong.Sender\PingPong.Sender.csproj" />
     <ProjectReference Include="..\PingPong.Receiver\PingPong.Receiver.csproj" />
   </ItemGroup>

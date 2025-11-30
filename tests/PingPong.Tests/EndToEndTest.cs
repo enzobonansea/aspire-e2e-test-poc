@@ -35,6 +35,28 @@ public abstract class EndToEndTest<TAppHost> : IAsyncLifetime where TAppHost : c
     /// </summary>
     protected IReadOnlyList<Span> ReceivedSpans => _traceCollector?.ReceivedSpans ?? [];
 
+    /// <summary>
+    /// Creates an HTTP client configured to call the specified resource.
+    /// </summary>
+    /// <param name="resourceName">The name of the resource in the AppHost</param>
+    /// <param name="endpointName">Optional endpoint name (defaults to "http")</param>
+    /// <returns>An HttpClient configured for the resource</returns>
+    protected HttpClient CreateHttpClient(string resourceName, string endpointName = "http")
+    {
+        return App.CreateHttpClient(resourceName, endpointName);
+    }
+
+    /// <summary>
+    /// Gets the connection string for the specified resource.
+    /// </summary>
+    /// <param name="resourceName">The name of the resource in the AppHost</param>
+    /// <returns>The connection string</returns>
+    protected async Task<string> GetConnectionStringAsync(string resourceName)
+    {
+        return await App.GetConnectionStringAsync(resourceName)
+            ?? throw new InvalidOperationException($"Connection string for '{resourceName}' not found");
+    }
+
     public async Task InitializeAsync()
     {
         // Start OTLP gRPC collector
