@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using System.Text.Json;
 using Aspire.Hosting;
 using Aspire.Hosting.Testing;
@@ -153,14 +152,9 @@ public abstract class EndToEndTest<TAppHost> : IClassFixture<AspireFixture<TAppH
 
     /// <summary>
     /// Sends a GraphQL mutation and extracts a result using the provided selector.
-    /// Returns both the result and the TraceId for span correlation.
     /// </summary>
-    protected async Task<(TResult Result, string TraceId)> SendGraphQLMutation<TResult>(string mutation, Func<JsonElement, TResult> resultSelector)
+    protected async Task<TResult> SendGraphQLMutation<TResult>(string mutation, Func<JsonElement, TResult> resultSelector)
     {
-        // Start an activity to establish trace context that will propagate through all downstream services
-        using var activity = new Activity("TestMutation").Start();
-        var traceId = activity.TraceId.ToString();
-
         using var httpClient = CreateHttpClient("api");
         var graphqlQuery = new { query = mutation };
 
@@ -185,20 +179,19 @@ public abstract class EndToEndTest<TAppHost> : IClassFixture<AspireFixture<TAppH
             throw new Exception($"GraphQL errors: {errors}");
         }
 
-        return (resultSelector(jsonResponse.GetProperty("data")), traceId);
+        return resultSelector(jsonResponse.GetProperty("data"));
     }
 
     /// <summary>
     /// Sends a GraphQL mutation, waits for message processing, and returns the extracted result.
-    /// Uses TraceId correlation to ensure we only match spans from this specific request.
     /// </summary>
     protected async Task<TResult> SendMutationAndWaitForMessage<TMessage, TResult>(
         string mutation,
         Func<JsonElement, TResult> resultSelector,
         TimeSpan timeout)
     {
-        var (result, traceId) = await SendGraphQLMutation(mutation, resultSelector);
-        var span = await WaitForMessageProcessed<TMessage>(timeout, traceId);
+        var result = await SendGraphQLMutation(mutation, resultSelector);
+        var span = await WaitForMessageProcessed<TMessage>(timeout);
         AssertSpanSucceeded(span);
         return result;
     }
@@ -206,40 +199,25 @@ public abstract class EndToEndTest<TAppHost> : IClassFixture<AspireFixture<TAppH
     /// <summary>
     /// Waits for a message of the specified type to be processed successfully.
     /// </summary>
-    /// <param name="timeout">Maximum time to wait for the span</param>
-    /// <param name="traceId">Optional TraceId to filter spans (for concurrent test isolation)</param>
-    protected async Task<Span> WaitForMessageProcessed<TMessage>(TimeSpan timeout, string? traceId = null)
+    protected async Task<Span> WaitForMessageProcessed<TMessage>(TimeSpan timeout)
     {
         var messageTypeName = typeof(TMessage).Name;
         return await WaitForSpan(
             span => IsMessageProcessSpan(span, messageTypeName),
             timeout,
-            traceId,
             $"message '{messageTypeName}' to be processed");
     }
 
     /// <summary>
     /// Waits for a span matching the specified predicate.
     /// </summary>
-    /// <param name="predicate">Predicate to match the span</param>
-    /// <param name="timeout">Maximum time to wait</param>
-    /// <param name="traceId">Optional TraceId to filter spans (for concurrent test isolation)</param>
-    /// <param name="description">Description for timeout error message</param>
-    protected async Task<Span> WaitForSpan(Func<Span, bool> predicate, TimeSpan timeout, string? traceId = null, string? description = null)
+    protected async Task<Span> WaitForSpan(Func<Span, bool> predicate, TimeSpan timeout, string? description = null)
     {
         var tcs = new TaskCompletionSource<Span>();
         var spansObserved = new List<string>();
 
         void OnSpanReceived(Span span)
         {
-            // Filter by TraceId if provided (for concurrent test isolation)
-            if (traceId != null)
-            {
-                var spanTraceId = Convert.ToHexString(span.TraceId.ToByteArray()).ToLowerInvariant();
-                if (!spanTraceId.Equals(traceId, StringComparison.OrdinalIgnoreCase))
-                    return; // Skip spans from other traces
-            }
-
             var attrInfo = string.Join(", ", span.Attributes.Select(a => $"{a.Key}={a.Value.StringValue}"));
             lock (spansObserved)
             {
@@ -270,9 +248,8 @@ public abstract class EndToEndTest<TAppHost> : IClassFixture<AspireFixture<TAppH
             }
 
             var desc = description ?? "matching span";
-            var traceInfo = traceId != null ? $" (TraceId: {traceId})" : "";
             throw new TimeoutException(
-                $"Timeout waiting for {desc}{traceInfo}.\n\nReceived spans:\n{observedInfo}");
+                $"Timeout waiting for {desc}.\n\nReceived spans:\n{observedInfo}");
         }
         finally
         {
